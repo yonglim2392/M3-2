@@ -68,81 +68,128 @@ class SchedulingEnv(gym.Env):
             daily_prod = row['PRED_SEWING']
             self.line_hourly_production[line_no] = daily_prod / self.DAILY_WORK_HOURS
 
-    def _get_heuristic_best_line(self, order, current_line_availability):
-        """
-        Replicates the line selection logic from simple.py to find the best line
-        for a given order based on the current line availability.
-        This method does NOT modify the environment's state.
-        """
+    def _get_heuristic_best_line(self, order, order_idx, current_line_availability):
         prod_no = order['PROD_NO']
         style = order['Style']
         qty = order['Remaining_QTY']
-        delivery_date = order['S/D']
+        delivery_date = pd.to_datetime(order['S/D'])
+        order_type = order['TYPE']
 
-        best_line = None
-        min_finish_time = datetime.max
-        best_line_score = -1
-
+        candidate_lines = []
         for line_no, availability in current_line_availability.items():
-            line_hourly_prod = self.line_hourly_production[line_no]
-            
-            temp_start_time = availability['next_available_time']
-            # Simulate with a more realistic quantity (e.g., one day's production)
-            qty_for_one_day = self.DAILY_WORK_HOURS * line_hourly_prod
-            temp_remaining_qty = min(qty, qty_for_one_day)
-            temp_current_day_work_hours = availability['current_day_work_hours']
-            temp_finish_time = temp_start_time # Initialize to temp_start_time
-            
-            # Simulate finish time calculation (same as in step method)
-            while temp_remaining_qty > 0:
-                current_day_date = temp_start_time.date()
+            if order_type in self.line_type_production[line_no] and self.line_type_production[line_no][order_type]:
+                line_daily_prod = self.line_type_production[line_no][order_type]
+                start_time = availability['next_available_time']
                 
-                if temp_start_time.time() >= time(self.WORK_END_HOUR, 0) or \
-                   (temp_start_time.date() > current_day_date and temp_start_time.time() < time(self.WORK_START_HOUR, 0)):
-                    temp_start_time = datetime.combine(current_day_date + timedelta(days=1), time(self.WORK_START_HOUR, 0))
-                    temp_current_day_work_hours = 0
-                    current_day_date = temp_start_time.date()
+                sim_current_time = start_time
+                sim_remaining_qty = qty
+                temp_finish_time = sim_current_time
 
-                while temp_start_time.weekday() >= 5:
-                    temp_start_time += timedelta(days=1)
-                    temp_start_time = datetime.combine(temp_start_time.date(), time(self.WORK_START_HOUR, 0))
-                    temp_current_day_work_hours = 0
-                    current_day_date = temp_start_time.date()
+                while sim_remaining_qty > 0:
+                    if sim_current_time.time() >= time(self.WORK_END_HOUR, 0):
+                        sim_current_time = datetime.combine(sim_current_time.date() + timedelta(days=1), time(self.WORK_START_HOUR, 0))
+                    elif sim_current_time.time() < time(self.WORK_START_HOUR, 0):
+                        sim_current_time = datetime.combine(sim_current_time.date(), time(self.WORK_START_HOUR, 0))
 
-                available_hours_today = self.DAILY_WORK_HOURS - temp_current_day_work_hours
-                qty_producible_today = int(available_hours_today * line_hourly_prod)
+                    sim_current_date = sim_current_time.date()
+                    
+                    if sim_current_date.weekday() >= 5:
+                        sim_current_time = datetime.combine(sim_current_date + timedelta(days=1), time(self.WORK_START_HOUR, 0))
+                        continue
 
-                if temp_remaining_qty <= qty_producible_today:
-                    hours_for_this_segment = temp_remaining_qty / line_hourly_prod
-                    temp_finish_time = temp_start_time + timedelta(hours=hours_for_this_segment)
-                    temp_remaining_qty = 0
-                else:
-                    temp_finish_time = datetime.combine(current_day_date, time(self.WORK_END_HOUR, 0))
-                    temp_remaining_qty -= qty_producible_today
-                    temp_start_time = temp_finish_time
-                    temp_current_day_work_hours = self.DAILY_WORK_HOURS
+                    day_index = (sim_current_date - self.TODAY.date()).days
 
-            if temp_finish_time.date() >= delivery_date.date():
-                continue
+                    if day_index < 0:
+                        daily_prod = 0
+                    elif day_index >= len(line_daily_prod):
+                        daily_prod = line_daily_prod[-1] if line_daily_prod else 0
+                    else:
+                        daily_prod = line_daily_prod[day_index]
 
-            score = 0
-            if availability['last_style_processed'] == style:
-                score += 100 # High bonus from simple.py
+                    if daily_prod <= 0:
+                        sim_current_time = datetime.combine(sim_current_date + timedelta(days=1), time(self.WORK_START_HOUR, 0))
+                        continue
+                    
+                    line_hourly_prod = daily_prod / self.DAILY_WORK_HOURS
 
-            is_better_candidate = False
-            if best_line is None:
-                is_better_candidate = True
-            elif score > best_line_score:
-                is_better_candidate = True
-            elif score == best_line_score and temp_finish_time < min_finish_time:
-                is_better_candidate = True
+                    end_of_day = datetime.combine(sim_current_date, time(self.WORK_END_HOUR, 0))
+                    available_hours_today = (end_of_day - sim_current_time).total_seconds() / 3600
+                    prod_possible_today = available_hours_today * line_hourly_prod
 
-            if is_better_candidate:
-                best_line = line_no
-                min_finish_time = temp_finish_time
-                best_line_score = score
+                    if sim_remaining_qty <= prod_possible_today:
+                        hours_to_finish = sim_remaining_qty / line_hourly_prod
+                        temp_finish_time = sim_current_time + timedelta(hours=hours_to_finish)
+                        sim_remaining_qty = 0
+                    else:
+                        sim_remaining_qty -= prod_possible_today
+                        sim_current_time = datetime.combine(sim_current_date + timedelta(days=1), time(self.WORK_START_HOUR, 0))
+                
+                candidate_lines.append({
+                    'line_no': line_no,
+                    'start_time': start_time,
+                    'finish_time': temp_finish_time,
+                    'daily_prod': line_daily_prod,
+                    'last_style': availability['last_style_processed']
+                })
+
+        valid_candidates = [c for c in candidate_lines if c['finish_time'].date() < delivery_date.date()]
         
-        return best_line
+        if not valid_candidates:
+            return None
+
+        # 각 후보 라인의 시작일 기준 생산량 계산
+        for c in valid_candidates:
+            day_index = (c['start_time'].date() - self.TODAY.date()).days
+            line_daily_prod = c['daily_prod']
+            
+            prod_on_start_day = 0
+            if line_daily_prod:
+                if 0 <= day_index < len(line_daily_prod):
+                    prod_on_start_day = line_daily_prod[day_index]
+                elif day_index >= len(line_daily_prod):
+                    prod_on_start_day = line_daily_prod[-1]
+            c['prod_on_start_day'] = prod_on_start_day
+
+        # 모든 후보 라인 중 최소/최대 생산량 계산
+        prods = [c['prod_on_start_day'] for c in valid_candidates if c['prod_on_start_day'] > 0]
+        
+        min_prod = min(prods) if prods else 0
+        max_prod = max(prods) if prods else 0
+
+        # 스타일 및 효율성 점수 계산
+        for c in valid_candidates:
+            assigned_lines_for_style = self.style_assignments.get(style, set())
+            
+            if c['last_style'] == style:
+                c['style_score'] = 2  # Best case: 라인의 마지막 작업과 스타일이 완벽히 연속될 때
+            elif assigned_lines_for_style and c['line_no'] not in assigned_lines_for_style:
+                c['style_score'] = 0  # Worst case: 할당 시 스타일 분산이 발생할 때
+            else:
+                c['style_score'] = 1  # Neutral: 스타일이 연속되지는 않지만, 새로운 스타일을 할당하여 분산을 일으키지 않을 때
+            
+            efficiency_score = 0
+            if c['prod_on_start_day'] > 0 and prods:
+                if max_prod > min_prod:
+                    efficiency_score = 1 + ((c['prod_on_start_day'] - min_prod) / (max_prod - min_prod)) * (self.config['reward_weights']['efficiency_max_score'] - 1)
+                else:
+                    efficiency_score = self.config['reward_weights']['efficiency_max_score']
+            c['efficiency_score'] = efficiency_score
+
+        # 설정에 따른 동적 정렬
+        def get_sort_key(c):
+            key_tuple = []
+            for priority in self.config['heuristic_priority']:
+                if priority == 'style':
+                    key_tuple.append(c['style_score'])
+                elif priority == 'efficiency':
+                    key_tuple.append(c['efficiency_score'])
+                elif priority == 'finish_time':
+                    key_tuple.append(-c['finish_time'].timestamp())
+            return tuple(key_tuple)
+
+        best_candidate = sorted(valid_candidates, key=get_sort_key, reverse=True)[0]
+
+        return best_candidate['line_no']
 
     def _is_delivery_possible(self, order, start_time):
         """주어진 시작 시간부터 모든 라인을 사용한다고 가정할 때, 주문의 납기 가능 여부를 확인합니다."""
@@ -332,6 +379,51 @@ class SchedulingEnv(gym.Env):
 
         final_finish_time = segments[-1]['finish'] if segments else final_start_time
 
+        if self.line_availability[assigned_line]['last_style_processed'] == style:
+            reward += weights['style_match']
+        else:
+            reward += weights['style_mismatch']
+
+        # 생산 효율 점수 로직 (특정 시작일 기준)
+        order_type = current_order['TYPE']
+        task_start_time = self.line_availability[assigned_line]['next_available_time']
+        day_index = (task_start_time.date() - self.TODAY.date()).days
+
+        prods_for_day = []
+        for line_no in self.line_nos:
+            if order_type in self.line_type_production[line_no]:
+                line_daily_prod_list = self.line_type_production[line_no][order_type]
+                
+                daily_prod = 0
+                if line_daily_prod_list:
+                    if 0 <= day_index < len(line_daily_prod_list):
+                        daily_prod = line_daily_prod_list[day_index]
+                    elif day_index >= len(line_daily_prod_list):
+                        daily_prod = line_daily_prod_list[-1] # Use last known value if out of range
+                
+                if daily_prod > 0:
+                    prods_for_day.append({'line': line_no, 'prod': daily_prod})
+
+        if len(prods_for_day) > 1:
+            min_prod = min(p['prod'] for p in prods_for_day)
+            max_prod = max(p['prod'] for p in prods_for_day)
+
+            assigned_line_prod = next((p['prod'] for p in prods_for_day if p['line'] == assigned_line), 0)
+
+            if assigned_line_prod > 0:
+                max_score = weights['efficiency_max_score']
+                min_score = 1
+
+                if max_prod > min_prod:
+                    efficiency_score = min_score + ((assigned_line_prod - min_prod) / (max_prod - min_prod)) * (max_score - min_score)
+                else: # All lines have the same production on that day
+                    efficiency_score = max_score
+                
+                reward += efficiency_score
+        elif len(prods_for_day) == 1 and prods_for_day[0]['line'] == assigned_line:
+            # Only one line can produce it on that day, give max score
+            reward += weights['efficiency_max_score']
+            
         # 라인 가용성 업데이트
         self.line_availability[assigned_line]['next_available_time'] = final_finish_time
         self.line_availability[assigned_line]['current_day_work_hours'] = current_day_work_hours if final_finish_time.date() == current_day_date else 0
@@ -363,13 +455,13 @@ class SchedulingEnv(gym.Env):
         # 납기일 준수 보상
         if remaining_qty == 0: # Only give reward when the order is complete
             if not missed_delivery_overall:
-                reward += 10 # 납기일 준수 시 양의 보상
+                reward += 100 # 납기일 준수 시 양의 보상
             else:
-                reward -= (delay_days_overall * 5) # 납기일 지연 시 큰 음의 보상 (지연 일수에 비례)
+                reward -= (delay_days_overall * 100) # 납기일 지연 시 큰 음의 보상 (지연 일수에 비례)
 
         # 스타일 연속성 보상
         if self.line_availability[assigned_line]['last_style_processed'] == style:
-            reward += 15 # 스타일 연속성 시 양의 보상 (가중치 상향 조정)
+            reward += 50 # 스타일 연속성 시 양의 보상 (가중치 상향 조정)
 
         # 에피소드 종료 여부 확인
         done = self.orders_df['Remaining_QTY'].sum() == 0
@@ -381,10 +473,8 @@ class SchedulingEnv(gym.Env):
             for line_no, availability in self.line_availability.items():
                 if availability['next_available_time'] > datetime.combine(self.TODAY.date(), time(self.WORK_START_HOUR, 0)): # 작업이 있었다면
                     makespan = max(makespan, (availability['next_available_time'] - datetime.combine(self.TODAY.date(), time(self.WORK_START_HOUR, 0))).total_seconds())
-
-            # Makespan이 짧을수록 높은 보상 (음수 값으로 페널티 부여)
-            # Makespan이 길수록 보상이 줄어들도록 설계
-            reward -= (makespan / (3600 * 24)) * 0.1 # Makespan 1일당 0.1점 페널티 (조정 필요)
+                    
+            reward -= (makespan / (3600 * 24)) * 0.1 # Makespan 1일당 0.1점 페널티
 
             # 라인 활용도 균등화 보상
             # 모든 라인의 최종 완료 시간의 표준 편차가 작을수록 보상
