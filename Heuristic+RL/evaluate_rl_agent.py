@@ -7,10 +7,10 @@ PROGRAMMER    : YONG
 CREATION DATE : 2025-08-29
 
 [Description]
- - Stable-Baselines3 PPO 기반 학습된 RL 에이전트를 평가하는 스크립트
- - SchedulingEnv 환경에서 학습된 에이전트를 사용하여 주문 스케줄링 시뮬레이션 수행
- - 평가 중 액션 마스크 처리, 납기 준수, 보상 누적 등 에피소드 단위로 실행
- - 최종 스케줄을 납기 미준수 최소화 및 보상 최대 기준으로 선택 후 CSV 저장
+  - Stable-Baselines3 PPO 기반 학습된 RL 에이전트를 평가하는 스크립트
+  - SchedulingEnv 환경에서 학습된 에이전트를 사용하여 주문 스케줄링 시뮬레이션 수행
+  - 평가 중 액션 마스크 처리, 납기 준수, 보상 누적 등 에피소드 단위로 실행
+  - 최종 스케줄을 납기 미준수 최소화 및 보상 최대 기준으로 선택 후 CSV 저장
 """
 
 import os
