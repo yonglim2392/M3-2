@@ -1,3 +1,25 @@
+"""
+PROGRAM NAME  : scheduling_env.py
+PROGRAMMER    : YONG
+CREATION DATE : 2025-08-29
+
+[Description]
+  - 강화학습(RL) 기반 생산 스케줄링 환경 구현 (Gymnasium 환경)
+  - 에이전트가 주문을 어떤 라인에 할당할지를 결정
+  - 상태(State): 현재 주문 정보 + 라인별 가용 상태 + 액션 마스크
+  - 행동(Action): 각 생산 라인 선택
+  - 보상(Reward):
+      1. 납기 준수: 주문 완료 시 납기 준수 여부에 따른 보상
+      2. 스타일 연속성: 같은 라인에서 같은 스타일 연속 처리 시 보상
+      3. 생산 효율성: 라인별 상대 생산량 기반 가산점
+      4. Makespan: 전체 생산 완료 시간에 따른 페널티
+      5. 라인 활용 균등화: 라인별 완료 시간 표준편차 기반 페널티
+  - step() 수행 시 한 주문을 선택된 라인에 할당하고 보상을 계산
+  - reset() 수행 시 환경 초기화 및 주문 재정렬
+  - 최종 결과는 get_scheduled_df()로 확인 가능
+  - 주말 및 근무시간(일별) 고려하여 작업 세그먼트별 시뮬레이션 수행
+"""
+
 import pandas as pd
 from datetime import datetime, timedelta, time
 import numpy as np
