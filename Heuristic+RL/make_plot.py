@@ -1,12 +1,40 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+!! 해당 코드는 개발 시 방향성 제시를 위해 개발한 코드로 실제 표출과는 다를 수 있습니다. !!
+PROGRAM NAME  : make_plot.py
+PROGRAMMER    : YONG
+CREATION DATE : 2025-08-29
+
+[Description]
+  - CSV 형태의 생산 스케줄 데이터를 시각화하는 스크립트
+  - 각 작업(PROD_NO)의 시작/종료 시간을 누적 작업 시간 좌표로 변환 후 Gantt 차트 형태로 표시
+  - 작업 시간:
+      - 평일 기준: WORK_START_HOUR ~ WORK_END_HOUR
+      - 주말: 작업 시간 없음
+  - 컬러:
+      - 작업 스타일(Style)에 따라 색상 지정
+      - Missed_Delivery 발생 시 텍스트 빨간색 표시
+  - X축:
+      - 누적 작업 시간을 기준으로 날짜 레이블 표시
+      - 평일만 눈금 추가
+  - Y축:
+      - Assigned_Line 별로 작업 구분
+  - 사용 목적:
+      - 생산 라인별 작업 일정 시각화
+      - 납기 지연 여부 확인 및 일정 최적화 분석
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from datetime import datetime, timedelta
 
 # --- datetime을 누적 작업 시간 좌표로 변환하는 헬퍼 함수 ---
-# 이 함수는 datetime 객체를 수치 좌표로 변환합니다.
-# 각 평일은 X축에서 1단위 너비를 차지하며, 작업 시간(8시-18시)이 이 1단위 너비에 맞춰 스케일링됩니다.
-# 주말은 1단위 너비를 차지하지만, 작업 시간은 0으로 간주됩니다.
+# 이 함수는 datetime 객체를 수치 좌표로 변환
+# 각 평일은 X축에서 1단위 너비를 차지하며, 작업 시간(8시-18시)이 이 1단위 너비에 맞춰 스케일링
+# 주말은 1단위 너비를 차지하지만, 작업 시간은 0으로 간주
 def map_datetime_to_plot_coord(dt, base_dt, work_start_hour, work_end_hour, daily_work_hours):
     # 기준 날짜를 해당 날의 작업 시작 시간으로 정규화
     base_dt_norm = base_dt.replace(hour=work_start_hour, minute=0, second=0, microsecond=0)
