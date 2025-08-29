@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# !! 해당 코드는 개발 시 방향성 제시를 위해 개발한 코드로 실제 표출과는 다를 수 있습니다. !! #
 """
-!! 해당 코드는 개발 시 방향성 제시를 위해 개발한 코드로 실제 표출과는 다를 수 있습니다. !!
 PROGRAM NAME  : make_plot.py
 PROGRAMMER    : YONG
 CREATION DATE : 2025-08-29
