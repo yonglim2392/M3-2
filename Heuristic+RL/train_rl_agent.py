@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-PROGRAM NAME  : train_agent.py
+PROGRAM NAME  : train_rl_agent.py
 PROGRAMMER    : YONG
 CREATION DATE : 2025-08-29
 
