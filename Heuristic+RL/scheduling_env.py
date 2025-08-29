@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 """
 PROGRAM NAME  : scheduling_env.py
 PROGRAMMER    : YONG
