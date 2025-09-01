@@ -31,9 +31,18 @@ from gymnasium import spaces
 
 class SchedulingEnv(gym.Env):
     """
-    강화학습 스케줄링 환경 (Gymnasium 기반)
-    - 에이전트가 주문을 어떤 라인에 할당할지를 선택
-    - 보상은 납기 준수, 스타일 연속성, 라인 효율, makespan 균형 등을 고려
+    Gymnasium 기반 강화학습 환경: 생산 스케줄링
+
+    핵심 설계:
+    - 상태(state): 하나의 '현재 주문'과 모든 라인의 요약된 가용 상태(다음 가용시간, 오늘 사용시간 등) + 액션마스크
+    - 행동(action): 정수(0..num_lines-1)로, 해당 정수는 정렬된 라인 목록에서 실제 라인번호로 매핑됨
+    - step(action): 현재 주문을 선택된 라인에 배정한 결과로 상태 전환, 보상 계산, 스케줄 기록
+
+    입력 인자(주요):
+    - order_path: 주문 데이터 CSV 경로. 반드시 'PROD_NO','Style',"Q'TY",'S/D','TYPE' 같은 칼럼이 있어야 함.
+    - info_path: 라인 정보 CSV 경로. 'Line No.','TYPE','PRED_SEWING' 칼럼을 기대.
+    - start_date_str: 시뮬레이션 기준일자 (YYYY-MM-DD)
+    - daily_work_hours: 하루 근무시간 (정수)
     """
     def __init__(self, order_path, info_path, start_date_str, daily_work_hours):
         super().__init__()
@@ -41,14 +50,14 @@ class SchedulingEnv(gym.Env):
         self.order_path       = order_path
         self.info_path        = info_path
         self.TODAY            = datetime.strptime(start_date_str, "%Y-%m-%d") # 시작일자
-        self.WORK_START_HOUR  = 8                                             # 하루 시작 시간 (08시)
-        self.WORK_END_HOUR    = self.WORK_START_HOUR + daily_work_hours       # 하루 종료 시간
+        self.WORK_START_HOUR  = 8                                             # 작업 시작 시간 (08시)
+        self.WORK_END_HOUR    = self.WORK_START_HOUR + daily_work_hours       # 작업 종료 시간
         self.DAILY_WORK_HOURS = daily_work_hours                              # 하루 작업 시간
 
-        # --- 데이터 불러오기 및 라인 생산능력 계산 ---
+        # --------------------------- 데이터 로드 & 전처리 ---------------------------
         self._load_data()
         self.info_df = self.original_info_df.copy()  # Info DataFrame 초기화
-        self._calculate_line_production()
+        self._calculate_line_production()            # 라인별 타입별 일별 생산량 리스트(문자열 JSON -> python list) 계산
 
         # Define observation and action spaces
         # Observation space: [Q'TY, Days_to_Delivery, Style_Hash, Line1_Time_Diff, Line1_Work_Hours, Line1_Style_Hash, ...]
@@ -82,6 +91,13 @@ class SchedulingEnv(gym.Env):
     # 데이터 로딩
     # -------------------------------
     def _load_data(self):
+        """
+        주문/라인 정보 CSV 로드
+        - original_orders_df: 주문 데이터 (S/D는 datetime으로 변환)
+        - original_info_df: 라인별 정보 (PRED_SEWING은 문자열 JSON으로 저장되어 있을 수 있음)
+
+        예외 처리: 파일 없음 또는 형식 오류 시 프로그램 종료(exit)
+        """
         try:
             self.original_orders_df = pd.read_csv(self.order_path) # 주문 데이터
             self.original_info_df = pd.read_csv(self.info_path)    # 라인별 정보
@@ -107,12 +123,17 @@ class SchedulingEnv(gym.Env):
             self.line_hourly_production[line_no] = daily_prod / self.DAILY_WORK_HOURS
 
     # -------------------------------
-    # 휴리스틱 기반 "가장 좋은 라인" 탐색
+    # 휴리스틱 기반 가장 좋은 라인 탐색
     # -------------------------------
     def _get_heuristic_best_line(self, order, order_idx, current_line_availability):
         """
-        - 납기, 스타일 연속성, 라인 효율 등을 기준으로
-        - 현재 주문을 넣기에 가장 적합한 라인을 찾음
+        현재 주문을 대상 라인들에 넣어보는 간단한 시뮬레이션을 수행하여
+        - 납기 내 완료 가능한 라인들 필터
+        - 스타일 연속성(마지막에 처리된 스타일) 및 하루 생산능력 기반으로 점수 계산
+
+        반환: best_line_no (라인 번호), 또는 None(납기 불가 등)
+
+        !! 이 함수는 RL 에이전트의 액션 마스크(action mask)를 만들기 위해 사용됩니다.
         """
         prod_no = order['PROD_NO']
         style = order['Style']
@@ -132,7 +153,7 @@ class SchedulingEnv(gym.Env):
                 sim_remaining_qty = qty
                 temp_finish_time = sim_current_time
 
-                # 남은 수량 다 소진될 때까지 시뮬레이션
+                # 남은 수량이 0이 될 때까지 (월~금 근무시간만 카운트)
                 while sim_remaining_qty > 0:
                     # 근무시간/주말 체크 후 다음 작업 가능 시간으로 이동
                     if sim_current_time.time() >= time(self.WORK_END_HOUR, 0):
@@ -141,12 +162,13 @@ class SchedulingEnv(gym.Env):
                         sim_current_time = datetime.combine(sim_current_time.date(), time(self.WORK_START_HOUR, 0))
 
                     sim_current_date = sim_current_time.date()
-                    
-                    if sim_current_date.weekday() >= 5: # 주말 skip
+
+                    # 주말이면 다음 평일로 이동
+                    if sim_current_date.weekday() >= 5: # 토요일(5), 일요일(6)
                         sim_current_time = datetime.combine(sim_current_date + timedelta(days=1), time(self.WORK_START_HOUR, 0))
                         continue
 
-                    # 해당 날짜의 생산능력 가져오기
+                    # 해당 날짜의 생산능력 가져오기 (day_index 기준)
                     day_index = (sim_current_date - self.TODAY.date()).days
 
                     if day_index < 0:
@@ -156,12 +178,15 @@ class SchedulingEnv(gym.Env):
                     else:
                         daily_prod = line_daily_prod[day_index]
 
+                    # 생산능력이 0이면 다음 날로
                     if daily_prod <= 0:
                         sim_current_time = datetime.combine(sim_current_date + timedelta(days=1), time(self.WORK_START_HOUR, 0))
                         continue
-                    
+
+                    # 시간당 생산능력으로 변환
                     line_hourly_prod = daily_prod / self.DAILY_WORK_HOURS
 
+                    # 그 날 남은 근무시간만큼 계산
                     end_of_day = datetime.combine(sim_current_date, time(self.WORK_END_HOUR, 0))
                     available_hours_today = (end_of_day - sim_current_time).total_seconds() / 3600
                     prod_possible_today = available_hours_today * line_hourly_prod
@@ -172,6 +197,7 @@ class SchedulingEnv(gym.Env):
                         temp_finish_time = sim_current_time + timedelta(hours=hours_to_finish)
                         sim_remaining_qty = 0
                     else:
+                        # 그렇지 않으면 오늘 가능한 만큼 빼고 다음 날로
                         sim_remaining_qty -= prod_possible_today
                         sim_current_time = datetime.combine(sim_current_date + timedelta(days=1), time(self.WORK_START_HOUR, 0))
 
@@ -224,22 +250,11 @@ class SchedulingEnv(gym.Env):
             efficiency_score = 0
             if c['prod_on_start_day'] > 0 and prods:
                 if max_prod > min_prod:
+                    # min~max 범위로 선형 스케일링하여 score 부여
                     efficiency_score = 1 + ((c['prod_on_start_day'] - min_prod) / (max_prod - min_prod)) * (self.config['reward_weights']['efficiency_max_score'] - 1)
                 else:
                     efficiency_score = self.config['reward_weights']['efficiency_max_score']
             c['efficiency_score'] = efficiency_score
-
-        # --- 우선순위에 따라 정렬 ---
-        def get_sort_key(c):
-            key_tuple = []
-            for priority in self.config['heuristic_priority']:
-                if priority == 'style':
-                    key_tuple.append(c['style_score'])
-                elif priority == 'efficiency':
-                    key_tuple.append(c['efficiency_score'])
-                elif priority == 'finish_time':
-                    key_tuple.append(-c['finish_time'].timestamp())
-            return tuple(key_tuple)
             
         # 최종 후보 선택
         best_candidate = sorted(valid_candidates, key=get_sort_key, reverse=True)[0]
@@ -249,7 +264,15 @@ class SchedulingEnv(gym.Env):
     # 납기 가능 여부 체크
     # -------------------------------
     def _is_delivery_possible(self, order, start_time):
-        """주어진 주문이 전체 라인 투입 기준으로 납기일 내에 끝낼 수 있는지 확인"""
+        """
+        현재 시점(start_time)에서 모든 라인을 동원했을 때 해당 주문을 납기일 이전(또는 기준)까지 처리할 수 있는지 평가.
+        - order["Q'TY"]: 요구 수량
+        - order['TYPE']: 생산 타입
+
+
+        구현: 납기일까지 각 평일 별로 "그 타입을 생산할 수 있는 모든 라인"의 daily_prod를 합산하여
+        총 생산 가능 수량 >= 요구 수량이면 True 반환
+        """
         required_hours = order['Q\'TY'] / sum(self.line_hourly_production.values())
         
         # Calculate available work hours until delivery date
@@ -268,6 +291,14 @@ class SchedulingEnv(gym.Env):
     # 환경 리셋
     # -------------------------------
     def reset(self, seed=None, options=None):
+        """
+        환경 초기화 및 내부 상태 재설정
+        - 각 라인의 가용시간(next_available_time)을 TODAY 기준 근무 시작 시각으로 초기화
+        - style_assignments 초기화
+        - 납기 불가능한 주문은 뒤로 보내는 간단한 전처리 수행
+
+        반환: 초기 상태(state), {}
+        """
         super().reset(seed=seed) # Call parent reset for seeding
         # 주문/라인 상태 초기화
         self.orders_df = self.original_orders_df.copy()
@@ -320,7 +351,16 @@ class SchedulingEnv(gym.Env):
     # 상태 벡터 생성
     # -------------------------------
     def _get_state(self):
-        """현재 주문 + 라인 상태 + 액션마스크"""
+        """
+        관측(observation)을 구성하여 numpy 배열로 반환.
+        요소:
+            0: Remaining_QTY (현재 주문의 남은 수량)
+            1: Days_to_Delivery (납기까지 남은 일수)
+            2: Style hash (정수로 인코딩한 스타일)
+            3: Type hash (정수로 인코딩한 타입)
+        이후: 각 라인별 [next_available_seconds, current_day_work_hours, last_style_hash, total_assigned_hours]
+        마지막에 action_mask (휴리스틱으로 허용된 라인만 1)
+        """
         unfinished_orders = self.orders_df[self.orders_df['Remaining_QTY'] > 0]
         if unfinished_orders.empty:
             return None  # 모든 주문이 처리됨
@@ -370,8 +410,17 @@ class SchedulingEnv(gym.Env):
     # -------------------------------
     def step(self, action):
         """
-        - action: 에이전트가 선택한 라인 번호
-        - 보상: 납기 준수, 스타일 연속, 라인 효율성, makespan, 라인 균등성
+        환경의 핵심 함수. 에이전트가 선택한 라인(action)을 받아 다음 상태, 보상, 종료여부, 추가정보(info)를 반환.
+
+        동작 순서(요약):
+        1) 처리되지 않은(remaining) 주문 중 맨 앞 주문을 꺼냄
+        2) action을 실제 라인 번호로 매핑
+        3) 선택 라인에서 오늘 할당 가능한 수량을 계산하고 세그먼트(하루 단위)로 진행
+        4) 보상(스타일, 효율성, 납기 등)을 부분적으로 계산
+        5) 주문 완료 시 추가 보상/패널티 적용
+        6) 모든 주문 완료 시 최종 보상(makespan, 균등화) 적용하고 info에 통계 추가
+
+        반환: next_state, reward, done, truncated(False), info
         """
         # 1) 아직 처리 안 된 주문(Row)만 필터링
         unfinished_orders = self.orders_df[self.orders_df['Remaining_QTY'] > 0]
@@ -600,12 +649,13 @@ class SchedulingEnv(gym.Env):
         return next_state, reward, done, False, info
         # 반환 값: (상태, 보상, 종료 여부, truncated=False, 추가정보)
 
-     # -------------------------------
+    # -------------------------------
     # helper functions
     # -------------------------------
+    # ------------------------------- 헬퍼: 라인 수 반환 -------------------------------
     def get_num_actions(self):
         # 가능한 행동의 개수 (라인의 개수)
         return len(self.info_df['Line No.'].unique())
-
+    # ------------------------------- 헬퍼: 스케줄 결과 DataFrame 반환 -------------------------------
     def get_scheduled_df(self):
         return pd.DataFrame(self.scheduled_tasks)
