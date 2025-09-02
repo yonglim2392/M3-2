@@ -29,8 +29,6 @@ from train_rl_agent import train_agent
 from evaluate_rl_agent import evaluate_agent
 from make_plot import visualize_schedule
 
-# python main.py --order_path ./DATA/TEST/YONGJIN2_ORDER.csv --info_path ./DATA/TEST/YONGJIN2_INFO.csv --start_date 2025-07-28 --work_hours 8
-
 #*===========================================================
 #* USER SET
 #*===========================================================
