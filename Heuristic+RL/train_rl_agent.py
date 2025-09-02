@@ -7,7 +7,7 @@ PROGRAMMER    : YONG
 CREATION DATE : 2025-08-29
 
 [Description]
-  - Stable-Baselines3 기반 PPO 강화학습 에이전트 학습 스크립트
+  - Stable-Baselines3 기반 PPO(Proximal Policy Optimization) 강화학습 에이전트 학습 스크립트
   - SchedulingEnv(Gym 환경)을 사용하여 생산 스케줄링 최적화 수행
   - 학습 목표: 주문 납기 준수, 생산 효율, 스타일 연속성, 라인 균등화
   - CustomEvalCallback 사용:
