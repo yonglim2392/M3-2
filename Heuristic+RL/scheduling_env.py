@@ -68,19 +68,17 @@ class SchedulingEnv(gym.Env):
         # Line_Work_Hours: 0 to DAILY_WORK_HOURS
         # Line_Style_Hash: 0 to 10000
 
-        # Estimate observation space size based on _get_state() output
-        # Temporarily reset to get a state for space definition
         temp_orders_df = self.original_orders_df.copy()
         temp_orders_df = temp_orders_df.sort_values(by='S/D').reset_index(drop=True)
         
         # --- 상태/행동 공간 정의 ---
-        # 상태: 주문(수량, 납기, 스타일) + 라인 상태(가용시간, 작업시간, 마지막 스타일 등) + 액션마스크
+        # 상태: 주문(수량, 납기, 스타일, 생산효율) + 라인 상태(가용시간, 작업시간, 마지막 스타일 등) + 액션마스크
         num_lines = len(self.original_info_df['Line No.'].unique())
-        obs_dim = 3 + (num_lines * 4) + num_lines # Order info (3) + Line info (4 per line) + Action Mask (num_lines)
+        obs_dim = 4 + (num_lines * 4) + num_lines # Order info (4) + Line info (4 per line) + Action Mask (num_lines)
 
         # 관측값 범위 정의 (low/high)
-        low = np.array([0, -365, 0] + [0, 0, 0, 0] * num_lines + [0] * num_lines, dtype=np.float32)
-        high = np.array([100000, 365, 10000] + [365*24*3600, self.DAILY_WORK_HOURS, 10000, 1000000] * num_lines + [1] * num_lines, dtype=np.float32) # 1 for action mask (boolean)
+        low = np.array([0, -365, 0, 0] + [0, 0, 0, 0] * num_lines + [0] * num_lines, dtype=np.float32)
+        high = np.array([100000, 365, 10000, 1000] + [365*24*3600, self.DAILY_WORK_HOURS, 10000, 1000000] * num_lines + [1] * num_lines, dtype=np.float32) # 1 for action mask (boolean)
         
         self.observation_space = spaces.Box(low=low, high=high, shape=(obs_dim,), dtype=np.float32)
         self.action_space = spaces.Discrete(self.get_num_actions())
