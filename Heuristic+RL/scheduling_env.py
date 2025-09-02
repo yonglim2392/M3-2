@@ -452,6 +452,19 @@ class SchedulingEnv(gym.Env):
         remaining_qty = qty                                                                      # 이 주문에서 아직 생산할 남은 수량
         current_day_work_hours = self.line_availability[assigned_line]['current_day_work_hours'] # 오늘 이미 사용한 작업시간(시간 단위)
 
+        # --- 근시안적 판단 방지: 예상 완료일 기반 즉시 페널티 ---
+        projected_finish_time = self._calculate_projected_finish_time(
+            self.line_availability[assigned_line]['next_available_time'],
+            qty,
+            line_daily_prod_list
+        )
+        effective_delivery_date_check = delivery_date.date() - timedelta(days=1)
+        if projected_finish_time.date() > effective_delivery_date_check:
+            # 예상 완료일이 납기를 넘길 경우, 즉시 페널티를 부여하여 해당 선택을 억제
+            penalty = weights.get('projected_late_penalty', -50)
+            delay = (projected_finish_time.date() - effective_delivery_date_check).days
+            reward += penalty * delay # 지연 일수가 클수록 페널티 증가
+          
         # 7) 세그먼트(하루 단위 작업 블록) 시뮬레이션 준비
         final_start_time = task_start_time            # 실제 작업 시작한 시각(첫 세그먼트의 시작)
         current_segment_start_time = task_start_time  # 지금 세그먼트 시작시각(가변)
